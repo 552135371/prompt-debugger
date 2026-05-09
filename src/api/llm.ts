@@ -39,47 +39,47 @@ export interface LLMConfig {
 // 从原项目 llm_config.json 迁移的配置（含全部可用模型）
 const BUILTIN_LLM_CONFIG: LLMConfig = {
   'doubao-seed-2-0-pro-260215': {
-    api_key: '',
+    api_key: import.meta.env.VITE_DOUBAO_API_KEY ?? '',
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
     model: 'doubao-seed-2-0-pro-260215'
   },
   'doubao-flash': {
-    api_key: '',
+    api_key: import.meta.env.VITE_DOUBAO_API_KEY ?? '',
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
     model: 'doubao-seed-2-0-lite-260215'
   },
   'kimi-k2': {
-    api_key: '',
+    api_key: import.meta.env.VITE_KIMI_API_KEY ?? '',
     base_url: 'https://api.moonshot.cn/v1',
     model: 'kimi-k2-0905-preview'
   },
   'kimi-k2-thinking': {
-    api_key: '',
+    api_key: import.meta.env.VITE_KIMI_API_KEY ?? '',
     base_url: 'https://api.moonshot.cn/v1',
     model: 'kimi-k2-thinking'
   },
   'deepseek-chat': {
-    api_key: '',
+    api_key: import.meta.env.VITE_DEEPSEEK_API_KEY ?? '',
     base_url: 'https://api.deepseek.com',
     model: 'deepseek-chat'
   },
   'deepseek-reasoner': {
-    api_key: '',
+    api_key: import.meta.env.VITE_DEEPSEEK_API_KEY ?? '',
     base_url: 'https://api.deepseek.com',
     model: 'deepseek-reasoner'
   },
   'google/gemini-2.5-flash': {
-    api_key: '',
+    api_key: import.meta.env.VITE_OPENROUTER_API_KEY ?? '',
     base_url: 'https://openrouter.ai/api/v1',
     model: 'google/gemini-2.5-flash'
   },
   'qwen/qwen3-max': {
-    api_key: '',
+    api_key: import.meta.env.VITE_QWEN_API_KEY ?? '',
     base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     model: 'qwen3-max'
   },
   'qwen/qwen3-max-thinking': {
-    api_key: '',
+    api_key: import.meta.env.VITE_QWEN_API_KEY ?? '',
     base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     model: 'qwen3-max'
   }
