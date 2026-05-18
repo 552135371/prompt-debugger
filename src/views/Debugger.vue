@@ -38,7 +38,7 @@
 
     <div v-else class="pd-body">
       <!-- 左侧配置面板 -->
-      <div class="pd-left">
+      <div class="pd-left" :style="{ width: leftWidth + 'px' }">
         <el-tabs v-model="activeTab" type="card">
           <!-- Prompt 配置 -->
           <el-tab-pane label="Prompt 配置" name="prompt">
@@ -117,7 +117,7 @@
               <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                 <span style="font-weight:600;">测试用例列表（{{ testCases.length }}）</span>
                 <div>
-                  <el-button size="small" type="primary" @click="showCaseDialog = true">+ 新增</el-button>
+                  <el-button size="small" type="primary" @click="editingCase = null; caseForm = { name: '', testDataStr: '{}' }; showCaseDialog = true">+ 新增</el-button>
                   <el-upload
                     :show-file-list="false"
                     accept=".json"
@@ -152,16 +152,49 @@
               </el-collapse-transition>
 
               <div v-if="testCases.length === 0" class="empty-tip">暂无测试用例，点击新增或导入</div>
-              <div v-for="(tc, idx) in testCases" :key="tc.id" class="tc-item">
-                <div class="tc-header">
-                  <span class="tc-index">{{ idx + 1 }}</span>
-                  <span class="tc-name">{{ tc.name }}</span>
-                  <div>
-                    <el-button size="small" text @click="editTestCase(tc)">编辑</el-button>
-                    <el-button size="small" text type="danger" @click="handleDeleteTestCase(tc.id!)">删除</el-button>
+
+              <!-- 无批次标签的散列用例 -->
+              <template v-if="ungroupedCases.length">
+                <div class="import-group">
+                  <div class="import-group-header" @click="toggleGroup('__ungrouped__')">
+                    <span class="import-group-toggle">{{ expandedGroups.has('__ungrouped__') ? '▾' : '▸' }}</span>
+                    <span class="import-group-name">📝 未分组（{{ ungroupedCases.length }}）</span>
                   </div>
+                  <template v-if="expandedGroups.has('__ungrouped__')">
+                    <div v-for="(tc, idx) in ungroupedCases" :key="tc.id" class="tc-item">
+                      <div class="tc-header">
+                        <span class="tc-index">{{ idx + 1 }}</span>
+                        <span class="tc-name">{{ tc.name }}</span>
+                        <div>
+                          <el-button size="small" text @click="editTestCase(tc)">编辑</el-button>
+                          <el-button size="small" text type="danger" @click="handleDeleteTestCase(tc.id!)">删除</el-button>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
                 </div>
-                <div class="tc-preview">{{ JSON.stringify(tc.test_data).substring(0, 120) }}...</div>
+              </template>
+
+              <!-- 按导入批次分组 -->
+              <div v-for="group in importGroups" :key="group.batchId" class="import-group">
+                <div class="import-group-header" @click="toggleGroup(group.batchId)">
+                  <span class="import-group-toggle">{{ expandedGroups.has(group.batchId) ? '▾' : '▸' }}</span>
+                  <span class="import-group-name">{{ group.batchName }}</span>
+                  <el-tag size="small" style="margin-left:8px;">{{ group.cases.length }} 个</el-tag>
+                  <el-button size="small" text @click.stop="exportGroupCases(group)" style="margin-left:auto;">⬇️ 导出</el-button>
+                </div>
+                <template v-if="expandedGroups.has(group.batchId)">
+                  <div v-for="(tc, idx) in group.cases" :key="tc.id" class="tc-item">
+                    <div class="tc-header">
+                      <span class="tc-index">{{ idx + 1 }}</span>
+                      <span class="tc-name">{{ tc.name }}</span>
+                      <div>
+                        <el-button size="small" text @click="editTestCase(tc)">编辑</el-button>
+                        <el-button size="small" text type="danger" @click="handleDeleteTestCase(tc.id!)">删除</el-button>
+                      </div>
+                    </div>
+                  </div>
+                </template>
               </div>
             </div>
           </el-tab-pane>
@@ -177,6 +210,9 @@
         </el-tabs>
       </div>
 
+      <!-- 拖拽分隔条 -->
+      <div class="pd-divider" @mousedown="startResize" />
+
       <!-- 右侧运行面板 -->
       <div class="pd-right">
         <div class="run-section">
@@ -189,12 +225,12 @@
                 <el-select v-model="singleTestCaseId" placeholder="或直接填写自定义输入" clearable style="width:100%; margin-bottom:10px;">
                   <el-option v-for="tc in testCases" :key="tc.id" :label="tc.name" :value="tc.id" />
                 </el-select>
-                <div class="section-label">自定义输入 JSON</div>
+                <div class="section-label">自定义输入 <span class="hint">（JSON 对象，或直接粘贴文本/Markdown）</span></div>
                 <el-input
                   v-model="customInputStr"
                   type="textarea"
                   :rows="5"
-                  placeholder='{"key": "value"}'
+                  placeholder='粘贴文本/Markdown，或输入 JSON：{"key": "value"}'
                   style="margin-bottom:10px;"
                 />
                 <el-button type="primary" @click="runSingle" :loading="singleRunning" style="width:100%;">▶ 运行</el-button>
@@ -208,6 +244,33 @@
                   </span>
                   <span class="result-time">{{ singleResult.execution_time }}ms</span>
                 </div>
+
+                <!-- Debug: 实际发送给模型的 Input -->
+                <el-collapse style="margin-bottom:8px;">
+                  <el-collapse-item title="🔍 Debug: 实际 Input（发送给模型的消息）" name="debug">
+                    <!-- 请求参数 -->
+                    <div v-if="singleResult.request_params" class="debug-params-block">
+                      <div class="debug-msg-role">请求参数</div>
+                      <div class="debug-params-grid">
+                        <template v-for="(val, key) in singleResult.request_params" :key="key">
+                          <span class="param-key">{{ key }}</span>
+                          <span class="param-val" :class="{ 'param-null': val === null }">{{ val ?? 'null（未发送）' }}</span>
+                        </template>
+                      </div>
+                    </div>
+                    <!-- 消息列表 -->
+                    <div v-if="singleResult.stage1_messages?.length">
+                      <div v-for="(msg, i) in singleResult.stage1_messages" :key="i" class="debug-msg-block">
+                        <div class="debug-msg-role">{{ msg.role }}</div>
+                        <pre class="debug-msg-content">{{ msg.content }}</pre>
+                      </div>
+                    </div>
+                    <div v-else class="empty-tip">无 messages 记录</div>
+                  </el-collapse-item>
+                </el-collapse>
+
+                <!-- Output -->
+                <div class="section-label" style="margin-bottom:4px;">Output</div>
                 <template v-if="singleResult.execution_mode === 'single_stage'">
                   <pre class="output-pre">{{ JSON.stringify(singleResult.output, null, 2) }}</pre>
                 </template>
@@ -225,11 +288,39 @@
             <el-tab-pane label="批量运行" name="batch">
               <div class="run-block">
                 <div class="section-label">选择用例范围</div>
-                <el-checkbox v-model="runAllCases" style="margin-bottom:8px;">运行全部（{{ testCases.length }} 个）</el-checkbox>
-                <div v-if="!runAllCases" style="margin-bottom:8px;">
+                <el-radio-group v-model="batchSelectMode" style="margin-bottom:12px;">
+                  <el-radio value="all">全部（{{ testCases.length }} 个）</el-radio>
+                  <el-radio value="group">按导入批次</el-radio>
+                  <el-radio value="custom">自定义</el-radio>
+                </el-radio-group>
+
+                <!-- 按批次选择 -->
+                <div v-if="batchSelectMode === 'group'" style="margin-bottom:8px;">
+                  <div v-for="group in importGroups" :key="group.batchId"
+                    class="batch-group-option"
+                    :class="{ selected: selectedBatchGroupId === group.batchId }"
+                    @click="selectedBatchGroupId = group.batchId">
+                    <span>{{ group.batchName }}</span>
+                    <el-tag size="small">{{ group.cases.length }} 个</el-tag>
+                  </div>
+                  <div v-if="ungroupedCases.length"
+                    class="batch-group-option"
+                    :class="{ selected: selectedBatchGroupId === '__ungrouped__' }"
+                    @click="selectedBatchGroupId = '__ungrouped__'">
+                    <span>📝 手动新增</span>
+                    <el-tag size="small">{{ ungroupedCases.length }} 个</el-tag>
+                  </div>
+                </div>
+
+                <!-- 自定义勾选 -->
+                <div v-if="batchSelectMode === 'custom'" style="margin-bottom:8px;">
                   <el-checkbox-group v-model="selectedCaseIds">
                     <el-checkbox v-for="tc in testCases" :key="tc.id" :value="tc.id" style="display:block; margin-bottom:4px;">{{ tc.name }}</el-checkbox>
                   </el-checkbox-group>
+                </div>
+
+                <div style="margin-bottom:8px; font-size:12px; color:#909399;">
+                  已选 {{ casesToRunCount }} 个用例
                 </div>
                 <el-button type="primary" @click="runBatch" :loading="batchRunning" style="width:100%;">▶ 开始批量运行</el-button>
               </div>
@@ -327,7 +418,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getDebuggerList, saveDebugger, deleteDebugger,
   getTestCases, saveTestCase, deleteTestCase, batchImportTestCases,
-  saveHistory, saveEvaluationResult,
+  saveHistory, saveEvaluationResult, createBatchRun,
   type PromptDebugger, type DebugTestCase
 } from '@/api/debugger'
 import { chatLLM, getLLMConfig, saveLLMConfig, getModelList, type LLMConfig } from '@/api/llm'
@@ -348,6 +439,28 @@ const saving = ref(false)
 
 const testCases = ref<DebugTestCase[]>([])
 
+// 导入批次分组 computed
+const importGroups = computed(() => {
+  const map = new Map<string, { batchId: string; batchName: string; cases: DebugTestCase[] }>()
+  for (const tc of testCases.value) {
+    if (!tc.import_batch_id) continue
+    if (!map.has(tc.import_batch_id)) {
+      map.set(tc.import_batch_id, { batchId: tc.import_batch_id, batchName: tc.import_batch_name || tc.import_batch_id, cases: [] })
+    }
+    map.get(tc.import_batch_id)!.cases.push(tc)
+  }
+  return Array.from(map.values())
+})
+const ungroupedCases = computed(() => testCases.value.filter(tc => !tc.import_batch_id))
+
+// 折叠状态
+const expandedGroups = ref<Set<string>>(new Set())
+const toggleGroup = (id: string) => {
+  if (expandedGroups.value.has(id)) expandedGroups.value.delete(id)
+  else expandedGroups.value.add(id)
+  expandedGroups.value = new Set(expandedGroups.value)
+}
+
 // Run state
 const singleRunning = ref(false)
 const batchRunning = ref(false)
@@ -355,6 +468,8 @@ const singleTestCaseId = ref<string | null>(null)
 const customInputStr = ref('')
 const singleResult = ref<ExecutionResult | null>(null)
 const runAllCases = ref(true)
+const batchSelectMode = ref<'all' | 'group' | 'custom'>('all')
+const selectedBatchGroupId = ref<string | null>(null)
 const selectedCaseIds = ref<string[]>([])
 const batchResults = ref<any[]>([])
 
@@ -413,6 +528,18 @@ const batchPassRate = computed(() => {
   if (!batchResults.value.length) return 0
   return batchResults.value.filter(r => r.status === 'success').length / batchResults.value.length
 })
+
+const getCasesToRun = (): DebugTestCase[] => {
+  if (batchSelectMode.value === 'all') return testCases.value
+  if (batchSelectMode.value === 'group') {
+    if (!selectedBatchGroupId.value) return []
+    if (selectedBatchGroupId.value === '__ungrouped__') return ungroupedCases.value
+    return importGroups.value.find(g => g.batchId === selectedBatchGroupId.value)?.cases ?? []
+  }
+  return testCases.value.filter(tc => selectedCaseIds.value.includes(tc.id!))
+}
+
+const casesToRunCount = computed(() => getCasesToRun().length)
 
 // ── Init ───────────────────────────────────────────────────────
 onMounted(async () => {
@@ -481,7 +608,18 @@ const handleCreateDebugger = async () => {
 }
 
 const handleDeleteDebugger = async () => {
-  await ElMessageBox.confirm('确定删除该调试配置？所有关联数据将一并删除。', '删除确认', { type: 'warning' })
+  const name = currentDebugger.value?.name ?? ''
+  await ElMessageBox.prompt(
+    `此操作将永久删除调试配置「${name}」及其所有测试用例、运行历史、评估报告，不可恢复！\n\n请输入配置名称确认：`,
+    '⚠️ 危险操作确认',
+    {
+      confirmButtonText: '确认删除',
+      cancelButtonText: '取消',
+      confirmButtonClass: 'el-button--danger',
+      inputPlaceholder: `请输入"${name}"`,
+      inputValidator: (v) => v === name ? true : '名称不匹配，请重新输入'
+    }
+  )
   await deleteDebugger(currentDebuggerId.value!)
   debuggerList.value = debuggerList.value.filter(d => d.id !== currentDebuggerId.value)
   currentDebuggerId.value = null
@@ -546,13 +684,13 @@ const handleSaveCase = async () => {
       ...(editingCase.value || {}),
       debugger_id: currentDebuggerId.value!,
       name: caseForm.value.name,
-      test_data: testData,
-      order: editingCase.value?.order ?? testCases.value.length
+      test_data: testData
     }
     const saved = await saveTestCase(tc)
+    console.log('[handleSaveCase] saved:', saved, 'editingCase.id:', editingCase.value?.id)
     if (editingCase.value?.id) {
       const idx = testCases.value.findIndex(t => t.id === saved.id)
-      if (idx >= 0) testCases.value[idx] = saved
+      if (idx >= 0) testCases.value.splice(idx, 1, saved)
     } else {
       testCases.value.push(saved)
     }
@@ -570,17 +708,36 @@ const handleDeleteTestCase = async (id: string) => {
   ElMessage.success('已删除')
 }
 
+const exportGroupCases = (group: { batchName: string; cases: DebugTestCase[] }) => {
+  const payload = { test_cases: group.cases.map(tc => tc.test_data) }
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${group.batchName.replace(/[\/\\:*?"<>|]/g, '_')}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 const handleImportCases = (file: File) => {
   const reader = new FileReader()
   reader.onload = async (e) => {
     try {
       const data = JSON.parse(e.target!.result as string)
-      const cases: DebugTestCase[] = (Array.isArray(data) ? data : [data]).map((item: any, i: number) => ({
+      const items: any[] = Array.isArray(data)
+        ? data
+        : Array.isArray(data.test_cases)
+          ? data.test_cases
+          : [data]
+      const batchId = crypto.randomUUID()
+      const batchName = file.name.replace(/\.json$/i, '') + ' · ' + new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      const cases: DebugTestCase[] = items.map((item: any, i: number) => ({
         debugger_id: currentDebuggerId.value!,
-        name: item.name || `用例 ${testCases.value.length + i + 1}`,
-        description: item.description || '',
-        test_data: item.test_data ?? item,
-        order: testCases.value.length + i
+        name: item.case_id || item.name || `用例 ${testCases.value.length + i + 1}`,
+        description: item.feature || item.description || '',
+        test_data: item,
+        import_batch_id: batchId,
+        import_batch_name: batchName
       }))
       const saved = await batchImportTestCases(cases)
       testCases.value.push(...saved)
@@ -601,7 +758,12 @@ const runSingle = async () => {
   }
   let customInput: any = null
   if (customInputStr.value.trim()) {
-    try { customInput = JSON.parse(customInputStr.value) } catch { ElMessage.error('自定义输入不是合法 JSON'); return }
+    try {
+      customInput = JSON.parse(customInputStr.value)
+    } catch {
+      // 非 JSON，当作纯文本/Markdown，包装成 { input: "..." }
+      customInput = { input: customInputStr.value }
+    }
   }
   if (!testCase && !customInput) { ElMessage.warning('请选择测试用例或填写自定义输入'); return }
 
@@ -623,7 +785,7 @@ const runSingle = async () => {
       test_case_id: testCase?.id,
       run_config: { prompt_type: currentConfig.value.prompt_type, system_prompt: currentConfig.value.system_prompt, model: currentDebugger.value.model_config.model },
       input_data: testCase?.test_data ?? customInput,
-      request_context: { stage1_messages: result.stage1_messages },
+      request_context: { stage1_messages: result.stage1_messages, request_params: result.request_params },
       output_result: outputStr,
       status: result.status,
       error_message: result.error,
@@ -638,16 +800,28 @@ const runSingle = async () => {
 const runBatch = async () => {
   if (!currentDebugger.value || !currentConfig.value) { ElMessage.error('请先选择调试配置'); return }
 
-  const casesToRun = runAllCases.value
-    ? testCases.value
-    : testCases.value.filter(tc => selectedCaseIds.value.includes(tc.id!))
-
+  const casesToRun = getCasesToRun()
   if (casesToRun.length === 0) { ElMessage.warning('请选择要运行的测试用例'); return }
+
+  // 让用户为本次批次命名
+  const defaultName = new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' 批次运行'
+  let batchName: string
+  try {
+    const { value } = await ElMessageBox.prompt('为本次批量运行命名（便于后续对比）', '批次命名', {
+      confirmButtonText: '开始运行',
+      cancelButtonText: '取消',
+      inputValue: defaultName,
+      inputValidator: (v) => v.trim() ? true : '请输入名称'
+    })
+    batchName = value.trim()
+  } catch { return }
 
   batchRunning.value = true
   batchResults.value = []
 
-  const batchRunId = crypto.randomUUID()
+  // 先在 debug_batch_run 中创建记录，获取批次 ID
+  const batchRecord = await createBatchRun({ debugger_id: currentDebuggerId.value!, name: batchName })
+  const batchRunId = batchRecord.id!
 
   for (const tc of casesToRun) {
     try {
@@ -665,7 +839,7 @@ const runBatch = async () => {
         batch_run_id: batchRunId,
         run_config: { prompt_type: currentConfig.value.prompt_type, system_prompt: currentConfig.value.system_prompt, model: currentDebugger.value.model_config.model },
         input_data: tc.test_data,
-        request_context: { stage1_messages: result.stage1_messages, stage2_outputs_with_messages: result.stage2_outputs_with_messages },
+        request_context: { stage1_messages: result.stage1_messages, stage2_outputs_with_messages: result.stage2_outputs_with_messages, request_params: result.request_params },
         output_result: outputStr,
         status: result.status,
         error_message: result.error,
@@ -683,6 +857,7 @@ const runBatch = async () => {
         tier_match: evalResult.tier_match ?? false,
         score_match: evalResult.score_match ?? false,
         reason_match: evalResult.reason_match ?? false,
+        no_false_fail: evalResult.no_false_fail,
         overall_pass: evalResult.overall_pass,
         pass_rate: evalResult.pass_rate,
         evaluation_details: evalResult,
@@ -694,11 +869,60 @@ const runBatch = async () => {
       batchResults.value.push({ testCaseName: tc.name, status: result.error ? 'error' : 'success', error: result.error, executionTime: result.execution_time })
     } catch (e: any) {
       batchResults.value.push({ testCaseName: tc.name, status: 'error', error: e.message, executionTime: 0 })
+      try {
+        const h = await saveHistory({
+          debugger_id: currentDebuggerId.value!,
+          test_case_id: tc.id,
+          batch_run_id: batchRunId,
+          run_config: { prompt_type: currentConfig.value.prompt_type, system_prompt: currentConfig.value.system_prompt, model: currentDebugger.value.model_config.model },
+          input_data: tc.test_data,
+          output_result: '',
+          status: 'error',
+          error_message: e.message,
+          execution_time: 0
+        })
+        await saveEvaluationResult({
+          history_id: h.id!,
+          test_case_id: tc.id!,
+          batch_run_id: batchRunId,
+          debugger_id: currentDebuggerId.value!,
+          tier_match: false,
+          score_match: false,
+          reason_match: false,
+          overall_pass: false,
+          pass_rate: 0,
+          evaluation_details: { error: e.message },
+          test_case_name: tc.name,
+          test_data: tc.test_data,
+          ai_output: ''
+        })
+      } catch { /* ignore secondary save failure */ }
     }
   }
 
   batchRunning.value = false
   ElMessage.success(`批量运行完成，通过率 ${(batchPassRate.value * 100).toFixed(0)}%`)
+}
+
+// ── Resize ─────────────────────────────────────────────────────
+const leftWidth = ref(520)
+const startResize = (e: MouseEvent) => {
+  const startX = e.clientX
+  const startWidth = leftWidth.value
+  const onMove = (ev: MouseEvent) => {
+    const delta = ev.clientX - startX
+    leftWidth.value = Math.min(900, Math.max(300, startWidth + delta))
+  }
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
 }
 
 // ── LLM Settings ───────────────────────────────────────────────
@@ -730,9 +954,15 @@ const saveLLMSettings = () => {
 }
 
 .pd-left {
-  width: 520px; min-width: 420px; background: #fff; border-right: 1px solid #e4e7ed;
-  overflow-y: auto; padding: 0;
+  min-width: 300px; max-width: 900px; background: #fff;
+  overflow-y: auto; padding: 0; flex-shrink: 0;
   .config-section { padding: 16px; }
+}
+
+.pd-divider {
+  width: 5px; cursor: col-resize; background: #e4e7ed; flex-shrink: 0;
+  transition: background 0.15s;
+  &:hover { background: #409eff; }
 }
 
 .pd-right { flex: 1; padding: 16px; overflow-y: auto; }
@@ -760,6 +990,18 @@ const saveLLMSettings = () => {
 }
 .stage-label { font-size: 12px; font-weight: 600; color: #409eff; margin-bottom: 4px; }
 .error-text { color: #f56c6c; font-size: 13px; margin-top: 8px; }
+.debug-params-block { margin-bottom: 12px; }
+.debug-params-grid {
+  display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px;
+  background: #f5f7fa; border: 1px solid #e4e7ed; border-radius: 4px; padding: 8px 10px;
+}
+.param-key { font-size: 11px; font-weight: 600; color: #409eff; font-family: monospace; }
+.param-val { font-size: 11px; color: #303133; font-family: monospace; }
+.param-null { color: #c0c4cc; font-style: italic; }
+
+.debug-msg-block { margin-bottom: 10px; }
+.debug-msg-role { font-size: 11px; font-weight: 600; color: #909399; text-transform: uppercase; margin-bottom: 4px; }
+.debug-msg-content { background: #f5f7fa; border: 1px solid #e4e7ed; border-radius: 4px; padding: 8px 10px; font-size: 12px; white-space: pre-wrap; word-break: break-all; margin: 0; max-height: 300px; overflow-y: auto; }
 
 .tag-success { color: #67c23a; font-weight: 600; }
 .tag-fail { color: #f56c6c; font-weight: 600; }
@@ -807,4 +1049,21 @@ const saveLLMSettings = () => {
   padding: 1px 6px; font-family: monospace; white-space: nowrap; min-width: 180px;
 }
 .field-desc { color: #606266; code { background: #f0f0f0; padding: 0 4px; border-radius: 3px; font-size: 11px; } }
+
+.import-group { margin-bottom: 8px; border: 1px solid #e4e7ed; border-radius: 6px; overflow: hidden; }
+.import-group-header {
+  display: flex; align-items: center; gap: 6px; padding: 8px 12px;
+  background: #f5f7fa; cursor: pointer; user-select: none;
+  &:hover { background: #ecf5ff; }
+}
+.import-group-toggle { font-size: 12px; color: #909399; }
+.import-group-name { font-size: 13px; font-weight: 600; color: #303133; flex: 1; }
+
+.batch-group-option {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; border: 1px solid #e4e7ed; border-radius: 6px;
+  margin-bottom: 6px; cursor: pointer;
+  &:hover { border-color: #409eff; background: #f0f7ff; }
+  &.selected { border-color: #409eff; background: #ecf5ff; }
+}
 </style>

@@ -33,6 +33,7 @@ export interface LLMConfig {
     api_key: string
     base_url: string
     model: string
+    reasoning_effort?: string
   }
 }
 
@@ -41,7 +42,20 @@ const BUILTIN_LLM_CONFIG: LLMConfig = {
   'doubao-seed-2-0-pro-260215': {
     api_key: import.meta.env.VITE_DOUBAO_API_KEY ?? '',
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
-    model: 'doubao-seed-2-0-pro-260215'
+    model: 'doubao-seed-2-0-pro-260215',
+    reasoning_effort: 'minimal'
+  },
+  'doubao-pro-thinking-low': {
+    api_key: import.meta.env.VITE_DOUBAO_API_KEY ?? '',
+    base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+    model: 'doubao-seed-2-0-pro-260215',
+    reasoning_effort: 'low'
+  },
+  'doubao-pro-thinking-medium': {
+    api_key: import.meta.env.VITE_DOUBAO_API_KEY ?? '',
+    base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+    model: 'doubao-seed-2-0-pro-260215',
+    reasoning_effort: 'medium'
   },
   'doubao-flash': {
     api_key: import.meta.env.VITE_DOUBAO_API_KEY ?? '',
@@ -60,12 +74,12 @@ const BUILTIN_LLM_CONFIG: LLMConfig = {
   },
   'deepseek-chat': {
     api_key: import.meta.env.VITE_DEEPSEEK_API_KEY ?? '',
-    base_url: 'https://api.deepseek.com',
+    base_url: 'https://api.deepseek.com/v1',
     model: 'deepseek-chat'
   },
   'deepseek-reasoner': {
     api_key: import.meta.env.VITE_DEEPSEEK_API_KEY ?? '',
-    base_url: 'https://api.deepseek.com',
+    base_url: 'https://api.deepseek.com/v1',
     model: 'deepseek-reasoner'
   },
   'google/gemini-2.5-flash': {
@@ -108,6 +122,7 @@ export const chatLLM = async (data: ChatRequestData): Promise<{
   success: boolean
   data: ChatResponseData
   msg: string
+  request_params?: Record<string, any>
 }> => {
   const config = getLLMConfig()
   const modelConfig = config[data.model] || config['default']
@@ -116,8 +131,27 @@ export const chatLLM = async (data: ChatRequestData): Promise<{
     return { success: false, data: {} as any, msg: '请先在设置中配置 API Key' }
   }
 
-  const baseUrl = (modelConfig.base_url || 'https://api.openai.com').replace(/\/$/, '')
-  const url = `${baseUrl}/v1/chat/completions`
+  const baseUrl = (modelConfig.base_url || 'https://api.openai.com/v1').replace(/\/$/, '')
+  const url = `${baseUrl}/chat/completions`
+
+  const requestBody: Record<string, any> = {
+    model: modelConfig.model || data.model,
+    messages: data.messages,
+    stream: false
+  }
+  if (modelConfig.reasoning_effort) {
+    requestBody.reasoning_effort = modelConfig.reasoning_effort
+  } else {
+    requestBody.temperature = data.temperature
+  }
+
+  const request_params = {
+    url,
+    model: requestBody.model,
+    temperature: requestBody.temperature ?? null,
+    reasoning_effort: requestBody.reasoning_effort ?? null,
+    messages_count: data.messages.length
+  }
 
   try {
     const resp = await fetch(url, {
@@ -126,22 +160,17 @@ export const chatLLM = async (data: ChatRequestData): Promise<{
         'Content-Type': 'application/json',
         Authorization: `Bearer ${modelConfig.api_key}`
       },
-      body: JSON.stringify({
-        model: modelConfig.model || data.model,
-        messages: data.messages,
-        temperature: data.temperature,
-        stream: false
-      })
+      body: JSON.stringify(requestBody)
     })
 
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}))
-      return { success: false, data: {} as any, msg: err?.error?.message || `HTTP ${resp.status}` }
+      return { success: false, data: {} as any, msg: err?.error?.message || `HTTP ${resp.status}`, request_params }
     }
 
     const json = await resp.json()
-    return { success: true, data: json as ChatResponseData, msg: 'ok' }
+    return { success: true, data: json as ChatResponseData, msg: 'ok', request_params }
   } catch (e: any) {
-    return { success: false, data: {} as any, msg: e.message || '请求失败' }
+    return { success: false, data: {} as any, msg: e.message || '请求失败', request_params }
   }
 }

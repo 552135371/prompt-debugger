@@ -17,11 +17,7 @@ export class AIPrefillExecutor extends BaseExecutor {
 
     const inputData = this.getInputData()
     const userPromptTemplate = this.localConfig.user_prompt || this.debuggerConfig.user_prompt_template || ''
-    let userPrompt = userPromptTemplate
-    Object.keys(inputData).forEach(key => {
-      userPrompt = userPrompt.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'),
-        typeof inputData[key] === 'object' ? JSON.stringify(inputData[key], null, 2) : String(inputData[key] || ''))
-    })
+    const userPrompt = this.buildUserPrompt(userPromptTemplate, inputData)
 
     const systemPrompt = this.localConfig.system_prompt || this.debuggerConfig.system_prompt || ''
     const messages = [
@@ -30,7 +26,7 @@ export class AIPrefillExecutor extends BaseExecutor {
     ]
 
     const response = await chatLLM({ model: this.debuggerConfig.model_config.model, messages, temperature: this.debuggerConfig.model_config.temperature || 0.7 })
-    if (!response.success) return { status: 'error', execution_mode: 'single_stage', error: response.msg, execution_time: this.getExecutionTime() }
+    if (!response.success) return { status: 'error', execution_mode: 'single_stage', error: response.msg, execution_time: this.getExecutionTime(), stage1_messages: messages, request_params: response.request_params }
 
     const rawOutput = response.data.choices[0]?.message?.content || ''
     let parsedOutput: any
@@ -43,7 +39,8 @@ export class AIPrefillExecutor extends BaseExecutor {
       token_usage: response.data.usage,
       execution_time: this.getExecutionTime(),
       debug_info: { model: this.debuggerConfig.model_config.model, temperature: this.debuggerConfig.model_config.temperature || 0.7, messages_count: messages.length },
-      stage1_messages: messages
+      stage1_messages: messages,
+      request_params: response.request_params
     }
   }
 }

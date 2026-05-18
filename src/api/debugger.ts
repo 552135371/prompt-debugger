@@ -21,6 +21,8 @@ export interface DebugTestCase {
   name: string
   description?: string
   test_data: any
+  import_batch_id?: string
+  import_batch_name?: string
   created_at?: string
 }
 
@@ -40,6 +42,13 @@ export interface DebugHistory {
   created_at?: string
 }
 
+export interface DebugBatchRun {
+  id?: string
+  debugger_id: string
+  name: string
+  created_at?: string
+}
+
 export interface DebugEvaluationResult {
   id?: string
   history_id: string
@@ -49,6 +58,7 @@ export interface DebugEvaluationResult {
   tier_match: boolean
   score_match: boolean
   reason_match: boolean
+  no_false_fail?: boolean
   overall_pass: boolean
   pass_rate: number
   evaluation_details?: any
@@ -111,7 +121,7 @@ export const saveTestCase = async (tc: DebugTestCase): Promise<DebugTestCase> =>
   if (tc.id) {
     const { data, error } = await supabase
       .from('debug_test_case')
-      .update(tc)
+      .update({ name: tc.name, description: tc.description, test_data: tc.test_data })
       .eq('id', tc.id)
       .select()
       .single()
@@ -147,6 +157,24 @@ export const saveHistory = async (h: DebugHistory): Promise<DebugHistory> => {
   return data as DebugHistory
 }
 
+// ── Batch Run ──────────────────────────────────────────────────
+
+export const createBatchRun = async (b: DebugBatchRun): Promise<DebugBatchRun> => {
+  const { data, error } = await supabase.from('debug_batch_run').insert(b).select().single()
+  if (error) throw error
+  return data as DebugBatchRun
+}
+
+export const updateBatchRunName = async (id: string, name: string): Promise<void> => {
+  const { error } = await supabase.from('debug_batch_run').update({ name }).eq('id', id)
+  if (error) throw error
+}
+
+export const deleteBatchRuns = async (ids: string[]): Promise<void> => {
+  const { error } = await supabase.from('debug_batch_run').delete().in('id', ids)
+  if (error) throw error
+}
+
 // ── Evaluation ─────────────────────────────────────────────────
 
 export const saveEvaluationResult = async (r: DebugEvaluationResult): Promise<DebugEvaluationResult> => {
@@ -165,7 +193,7 @@ export const getEvaluationReport = async (debugger_id: string, batch_run_id?: st
     .select(`
       *,
       debug_test_case ( name, test_data ),
-      debug_history ( output_result, run_config )
+      debug_history ( output_result, run_config, request_context, execution_time )
     `)
     .eq('debugger_id', debugger_id)
     .order('created_at', { ascending: false })
@@ -180,10 +208,9 @@ export const getEvaluationReport = async (debugger_id: string, batch_run_id?: st
 
 export const getBatchRunList = async (debugger_id: string) => {
   const { data, error } = await supabase
-    .from('debug_evaluation_result')
-    .select('batch_run_id, created_at, overall_pass')
+    .from('debug_batch_run')
+    .select('id, name, created_at')
     .eq('debugger_id', debugger_id)
-    .not('batch_run_id', 'is', null)
     .order('created_at', { ascending: false })
   if (error) throw error
   return data ?? []
@@ -199,5 +226,14 @@ export const clearEvaluationReport = async (debugger_id: string) => {
 
 export const deleteEvaluationResults = async (ids: string[]) => {
   const { error } = await supabase.from('debug_evaluation_result').delete().in('id', ids)
+  if (error) throw error
+}
+
+export const deleteEvaluationResultsByBatch = async (debugger_id: string, batch_run_ids: string[]) => {
+  const { error } = await supabase
+    .from('debug_evaluation_result')
+    .delete()
+    .eq('debugger_id', debugger_id)
+    .in('batch_run_id', batch_run_ids)
   if (error) throw error
 }

@@ -14,6 +14,7 @@ export interface ExecutionResult {
   }
   execution_time?: number
   debug_info?: any
+  request_params?: Record<string, any>
   stage1_messages?: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
   stage2_outputs_with_messages?: Array<{
     prompt_id: string

@@ -25,8 +25,14 @@ export abstract class BaseExecutor {
 
   protected getInputData(): any {
     if (this.customInput) return this.customInput
-    if (this.testCase?.test_data) return this.testCase.test_data
-    return {}
+    const td = this.testCase?.test_data
+    if (!td) return {}
+    // 只暴露 input 字段给模板，隔离 expected / expected_tier 等评估字段防止泄漏给模型
+    if (td.input !== undefined) {
+      return { input: typeof td.input === 'object' ? JSON.stringify(td.input, null, 2) : String(td.input) }
+    }
+    // 没有 input 子字段时（自定义输入场景），原样返回整个对象
+    return td
   }
 
   protected buildUserPrompt(template: string, data: Record<string, any>): string {

@@ -5,6 +5,7 @@ export interface EvalResult {
   tier_match?: boolean
   score_match?: boolean
   reason_match?: boolean
+  no_false_fail?: boolean  // 非误判：期望非fail时AI不输出fail；期望fail时AI必须输出fail
   pass_rate: number
   format?: string
   details?: any
@@ -19,6 +20,7 @@ export interface BatchStats {
   tier_pass_rate: number
   score_pass_rate: number
   reason_pass_rate: number
+  no_false_fail_rate: number
 }
 
 function parseJSON(text: string): any {
@@ -36,25 +38,15 @@ function evaluateSimple(aiData: any, expected: any): EvalResult {
     ? aiData?.tier === expected.tier
     : true
 
-  let score_match = true
-  if (expected.score_min !== undefined || expected.score_max !== undefined) {
-    const actual = Number(aiData?.score ?? aiData?.score_value ?? 0)
-    const min = Number(expected.score_min ?? -Infinity)
-    const max = Number(expected.score_max ?? Infinity)
-    score_match = actual >= min && actual <= max
+  // 期望非fail → AI输出只要不是fail即通过；期望fail → AI必须输出fail
+  let no_false_fail: boolean | undefined
+  if (expected.tier !== undefined) {
+    const expectedFail = expected.tier === 'fail'
+    const aiFail = aiData?.tier === 'fail'
+    no_false_fail = expectedFail ? aiFail : !aiFail
   }
 
-  let reason_match = true
-  if (expected.reason_must_contain && Array.isArray(expected.reason_must_contain)) {
-    const actual: string = String(aiData?.reason ?? aiData?.explanation ?? '')
-    reason_match = expected.reason_must_contain.every((kw: string) => actual.includes(kw))
-  }
-
-  const matches = [tier_match, score_match, reason_match]
-  const overall_pass = matches.every(Boolean)
-  const pass_rate = matches.filter(Boolean).length / matches.length
-
-  return { overall_pass, tier_match, score_match, reason_match, pass_rate, format: 'simple' }
+  return { overall_pass: tier_match, tier_match, score_match: true, reason_match: true, no_false_fail, pass_rate: tier_match ? 1 : 0, format: 'simple' }
 }
 
 export function evaluateSingleCase(
@@ -83,12 +75,13 @@ export function evaluateSingleCase(
 export function evaluateBatch(results: EvalResult[]): BatchStats {
   const total = results.length
   if (total === 0) {
-    return { total_count: 0, pass_count: 0, fail_count: 0, overall_pass_rate: 0, tier_pass_rate: 0, score_pass_rate: 0, reason_pass_rate: 0 }
+    return { total_count: 0, pass_count: 0, fail_count: 0, overall_pass_rate: 0, tier_pass_rate: 0, score_pass_rate: 0, reason_pass_rate: 0, no_false_fail_rate: 0 }
   }
   const pass_count = results.filter(r => r.overall_pass).length
   const simple = results.filter(r => r.format === 'simple')
   const rate = (arr: EvalResult[], key: keyof EvalResult) =>
     simple.length ? simple.filter(r => r[key] === true).length / simple.length : 0
+  const nffApplicable = simple.filter(r => r.no_false_fail !== undefined)
 
   return {
     total_count: total,
@@ -97,6 +90,7 @@ export function evaluateBatch(results: EvalResult[]): BatchStats {
     overall_pass_rate: pass_count / total,
     tier_pass_rate: rate(simple, 'tier_match'),
     score_pass_rate: rate(simple, 'score_match'),
-    reason_pass_rate: rate(simple, 'reason_match')
+    reason_pass_rate: rate(simple, 'reason_match'),
+    no_false_fail_rate: nffApplicable.length ? nffApplicable.filter(r => r.no_false_fail).length / nffApplicable.length : 0
   }
 }
